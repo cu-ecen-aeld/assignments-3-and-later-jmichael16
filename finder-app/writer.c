@@ -3,7 +3,7 @@
  * @brief A writing application which writes the string writestr to writefile
  * @usage ./writer </path/to/writefile> <writestr>
  *        where directory /path/to/ must exist on the filesystem, but writefile
- *        may be created
+ *        will be created / overwritten
  * @author Jake Michael, jami1063@colorado.edu
  *---------------------------------------------------------------------------*/
 
@@ -47,4 +47,3 @@ int main(int argc, char **argv) {
   return 0;
 
 } // end main
-
