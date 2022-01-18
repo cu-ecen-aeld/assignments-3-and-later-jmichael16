@@ -1,3 +1,11 @@
+/* ---------------------------------------------------------------------------- 
+ * @file systemcalls.c
+ * @brief system call practice code for assignment 3, part 1
+ * @author Jake Michael, jami1063@colorado.edu
+ *         Dan Walkes
+ * @resources Based on starter code from instructor Dan Walkes
+ *---------------------------------------------------------------------------*/
+
 #include <stdio.h>
 #include <unistd.h>
 #include <syslog.h>
@@ -16,6 +24,7 @@
 bool do_system(const char *cmd)
 {
   int rc;
+  bool retval = true;
   
   openlog(NULL, 0, LOG_USER);
 
@@ -23,23 +32,22 @@ bool do_system(const char *cmd)
 
   if (rc == 0 && cmd == NULL) {
 
-    syslog(LOG_ERR, "no shell available for system()\n"); 
-    return false;
+    syslog(LOG_ERR, "no shell available for system()"); 
+    retval = false;
 
   } else if (rc == -1) {
 
-    syslog(LOG_ERR, "child process could not be created\n");
-    return false;
+    syslog(LOG_ERR, "child process could not be created");
+    retval = false;
 
   } else if (rc != 0) {
 
-    syslog(LOG_INFO, "child shell returned non-zero\n");
-    return false;
+    syslog(LOG_INFO, "child shell returned non-zero");
+    retval = false;
 
   }
 
-  // no error
-  return true;
+  return retval;
 }
 
 /**
@@ -62,6 +70,7 @@ bool do_exec(int count, ...)
   va_start(args, count);
   char * command[count+1];
   int i, status, rc;
+  bool retval = true;
   pid_t pid;
 
   for(i=0; i<count; i++)
@@ -88,34 +97,48 @@ bool do_exec(int count, ...)
   if (pid == -1) {
 
     // fork failure
-    syslog(LOG_ERR, "fork failure\n");
-    return false;
+    syslog(LOG_ERR, "fork failure");
+    retval = false;
 
   } else if (pid == 0) {
 
-    // child process executes execv - only returns if there was
-    // an error
+    // child process executes execv - only returns on error
     rc = execv(command[0], command);
-    syslog(LOG_INFO, "child process has returned %d\n", rc);
-    return false;
+    syslog(LOG_ERR, "child process has returned %d", rc);
+    exit(EXIT_FAILURE);
 
   } else {
     
-    // the parent process executes the following:
-    waitpid(pid, &status, 0);
+    // the parent process waits
+    rc = waitpid(pid, &status, 0);
     
-    // see if child terminated abnormally
-    if ( WIFEXITED(status) && (WEXITSTATUS(status) != 0) ) {
+    if (rc == -1) {
 
-      // child failed
-      syslog(LOG_INFO, "child process terminated, WEXITSTATUS %d\n", WEXITSTATUS(status));
-      return false;
+      syslog(LOG_ERR, "waitpid fail");
+      retval = false;
+
+    }
+    
+    if ( !WIFEXITED(status) ) {
+
+      syslog(LOG_ERR, "child process terminated abnormally");
+      retval = false;
+
+    } else {
+
+      if ( WEXITSTATUS(status) ) {
+
+        // child process exit with nonzero return
+        syslog(LOG_INFO, "child process WEXITSTATUS %d", WEXITSTATUS(status));
+        retval = false;
+
+      }
 
     }
 
   } 
 
-  return true;
+  return retval;
 }
 
 /**
@@ -129,6 +152,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
   va_start(args, count);
   char * command[count+1];
   int i, status, rc;
+  bool retval = true;
   pid_t pid;
 
   for(i=0; i<count; i++)
@@ -147,51 +171,58 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 
   openlog(NULL, 0, LOG_USER);
 
-  int redirect_fd = open(outputfile, O_WRONLY|O_CREAT);
-
   pid = fork();
 
   if (pid == -1) {
 
     // fork failure
     syslog(LOG_ERR, "fork failure\n");
-    return false;
+    retval = false;
 
   } else if (pid == 0) {
-    
+
     // redirect stdout to redirect_fd
+    int redirect_fd = open(outputfile, O_WRONLY|O_CREAT);
     if ( (rc = dup2(redirect_fd, STDOUT_FILENO)) < 0 )  {
-      syslog(LOG_ERR, "dup2 fail code %d\n", rc);
+      syslog(LOG_ERR, "dup2 fail code %d", rc);
     }
     close(redirect_fd);
 
-    // child process executes execv - only returns if there was
-    // an error
+    // child process executes execv - only returns on error
     rc = execv(command[0], command);
-    syslog(LOG_INFO, "child process has returned %d\n", rc);
-    return false;
+    syslog(LOG_ERR, "child process has returned %d", rc);
+    exit(EXIT_FAILURE);
 
   } else {
     
     // the parent process waits
-    waitpid(pid, &status, 0);
+    rc = waitpid(pid, &status, 0);
+    
+    if (rc == -1) {
+
+      syslog(LOG_ERR, "waitpid fail");
+      retval = false;
+
+    }
     
     if ( !WIFEXITED(status) ) {
 
-      syslog(LOG_ERR, "child process terminated abnormally\n");
-      return false;
+      syslog(LOG_ERR, "child process terminated abnormally");
+      retval = false;
 
-    }
+    } else {
 
-    if (WEXITSTATUS(status)) {
+      if ( WEXITSTATUS(status) ) {
 
-      // child process exit with nonzero return
-      syslog(LOG_INFO, "child process WEXITSTATUS %d\n", WEXITSTATUS(status));
-      return false;
+        // child process exit with nonzero return
+        syslog(LOG_INFO, "child process WEXITSTATUS %d", WEXITSTATUS(status));
+        retval = false;
+
+      }
 
     }
 
   } 
 
-  return true;
+  return retval;
 }
