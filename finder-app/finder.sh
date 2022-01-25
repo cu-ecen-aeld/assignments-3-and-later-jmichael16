@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # --------------------------------------------------------------------------------
 # Assignment 1 finder.sh script
 # Make executable with chmod u+x and run with ./finder.sh <filedir> <searchstr>
