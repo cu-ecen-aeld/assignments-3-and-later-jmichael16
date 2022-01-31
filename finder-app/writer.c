@@ -27,17 +27,20 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  const char* writefile = argv[1];
+  const char* writestr = argv[2];
+
   // open file 
-  stream = fopen(argv[1], "w");
+  stream = fopen(writefile, "w");
   if (!stream) {
-    syslog(LOG_ERR, "error opening file %s\n", argv[1]);
+    syslog(LOG_ERR, "error opening file %s\n", writefile);
     return 1;
   }
 
   // write to file
-  rc = fputs(argv[2], stream);
+  rc = fputs(writestr, stream);
   if ( rc == EOF ) {
-    syslog(LOG_ERR, "cannot write %s to file %s\n", argv[2], argv[1]);
+    syslog(LOG_ERR, "cannot write %s to file %s\n", writestr, writefile);
     fclose(stream);
     return 1;
   }

@@ -83,7 +83,7 @@ fi
 
 # the following busybox steps roughly follow Mastering Embedded Linux Programming as a guide
 # Make and install busybox
-if [ ! -e "${OUTDIR}/rootfs/bin/busybox*" ]; then
+if [ ! -e "${OUTDIR}/rootfs/bin/busybox" ]; then
   echo "Making and installing busybox"
   make -j 8 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}  
   make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} CONFIG_PREFIX=${OUTDIR}/rootfs install
