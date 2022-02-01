@@ -8,7 +8,35 @@ set -u
 NUMFILES=10
 WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
-username=$(cat conf/username.txt)
+
+# Reference: https://stackoverflow.com/questions/592620/how-can-i-check-if-a-program-exists-from-a-bash-script
+# Below we are checking whether the program is in the PATH of the 
+# use the appropriate finder utility
+if ! command -v writer &> /dev/null; then
+  # the finder-test script is probably running from build machine
+  WRITER_UTILITY="./writer"
+else
+  # the finder-test script is probably running on the target
+  # and thus exists in the PATH
+  WRITER_UTILITY="writer"
+fi
+
+# use the appropriate finder utility
+if ! command -v finder.sh &> /dev/null; then
+  # the finder-test script is probably running from build machine
+  FINDER_UTILITY="./finder.sh"
+else
+  # the finder-test script is probably running from the target
+  # and thus exists in the PATH
+  FINDER_UTILITY="finder.sh"
+fi
+
+# find where we have stored the conf/username.txt 
+if [ -e ./conf/username.txt ]; then
+  username=$(cat conf/username.txt)
+else
+  username=$(cat /etc/finder-app/conf/username.txt)
+fi
 
 if [ $# -lt 2 ]
 then
@@ -48,10 +76,12 @@ fi
 
 for i in $( seq 1 $NUMFILES)
 do
-	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+  ${WRITER_UTILITY} "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
-OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
+# record output from finder utility and post result to /tmp/assignment-4-result.txt
+OUTPUTSTRING=$(${FINDER_UTILITY} "$WRITEDIR" "$WRITESTR")
+echo ${OUTPUTSTRING} > /tmp/assignment-4-result.txt
 
 set +e
 echo ${OUTPUTSTRING} | grep "${MATCHSTR}"
