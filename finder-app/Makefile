@@ -5,6 +5,8 @@ CC = gcc
 CFLAGS = -g -Wall -Werror 
 LDFLAGS = 
 
+all: $(TARGET)
+
 $(TARGET): $(OBJS) 
 	$(CROSS_COMPILE)$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
 
