@@ -1,17 +1,17 @@
 TARGET = writer
 SRCS = $(wildcard *.c)
 OBJS = $(SRCS:.c=.o)
-CC = gcc
+CC = $(CROSS_COMPILE)gcc
 CFLAGS = -g -Wall -Werror 
 LDFLAGS = 
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS) 
-	$(CROSS_COMPILE)$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
 
 %.o : %.c 
-	$(CROSS_COMPILE)$(CC) $(CFLAGS) -c $^
+	$(CC) $(CFLAGS) -c $^
 
 .PHONY: clean
 clean:
