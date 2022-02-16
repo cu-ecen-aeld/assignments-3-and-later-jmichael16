@@ -69,7 +69,7 @@ char *get_ip_str(const struct sockaddr_in *sa, char *dst);
  */
 struct addrinfo* server_addr = NULL;
 int sockfd = -1; 
-int connfd = -1;
+int peerfd = -1;
 
 /* 
  * @brief  the main function
@@ -149,9 +149,10 @@ int main(int argc, char* argv[])
     struct sockaddr_in peer_addr;
     socklen_t peer_addr_size = sizeof(peer_addr);
     char peer_addr_str[INET_ADDRSTRLEN];
+    
     // store file descriptor of accepted connection
-    connfd = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
-    if (connfd == -1) {
+    peerfd = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
+    if (peerfd == -1) {
       LOG(LOG_ERR, "accept returned -1"); perror("accept");
       looperror = -1;
       break;
@@ -162,16 +163,57 @@ int main(int argc, char* argv[])
 
     while(1)
     {
-      // read from socket until \n
-      
+      // initialize the recieve buffer
+      char *recv_buf = NULL;
+      int recv_buf_size = 0;
+
+      while(1) 
+      {
+        int recv_temp_size = 256;
+        char recv_temp[recv_temp_buf_size];
+
+        // read from socket until '\n' 
+        int ret = recv(peerfd, &recv_temp[0], recv_temp_size);
+        if (ret == -1 && errno != EINTR) {
+          LOG("recv returned -1"); perror("recv()");
+          break;
+        }
+        if (ret > 0) {
+          recv_buf = realloc(recv_buf, recv_buf_size + ret);
+        }
+        memcpy(recv_buf + recv_buf_size, recv_temp, ret);
+        recv_buf_size += ret;
+          
+        // if the temporary buffer holds '\n', then we can flush 
+        // recv_buf to file
+        char* packet_delimiter = strchr(recv_temp, '\n');
+        if (packet_delimiter != NULL) {
+          // delimeter found
+          break;
+        }
+      }
+
       // write to file
       int tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+      if (tempfd == -1) {
+        LOG("open() returned -1"); perror("open()");
+        looperror = -2;
+        break;
+      }
+      if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_size)) {
+        LOG("write_wrapper returned -1");
+        looperror = -3;
+        break;
+      }
+
+      // free the recv buffer
+      free(recv_buf);
 
       // write file contents to socket
-      // go to end of file
-      fseek(tempfd, 0L, SEEK_END);
-      int templen = ftell(tempfd);
-      char *buf = (char*) malloc(templen);
+      // get length of file
+      int templen = lseek(tempfd, 0, SEEK_END);
+      lseek(tempfd, 0, SEEK_SET);
+      char *buf = malloc(templen);
       
       free(buf);
       close(tempfd);
@@ -182,6 +224,7 @@ int main(int argc, char* argv[])
 
   if (looperror < 0) 
   {
+    LOG("looperror returned %d", looperror);
     cleanup();
     return -1;
   }
@@ -196,7 +239,7 @@ int write_wrapper(int fd, char* writestr, int len)
   while(len) {
     written = write(fd, writestr, len);
     if (written == -1 && errno != EINTR) {
-      break;
+      return -1;
     }
     len -= written;
     writestr += written;
@@ -225,8 +268,8 @@ void cleanup()
     close(sockfd);
   }
 
-  if (connfd < 0) {
-    close(connfd);
+  if (peerfd < 0) {
+    close(peerfd);
   }
   
 }
