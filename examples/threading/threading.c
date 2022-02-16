@@ -19,8 +19,9 @@
 
 void* threadfunc(void* thread_param)
 {
-  // return codes for error handling
+  // return codes / error handling
   int rc;
+  int completion_error = false;
 
   // retrieve thread_parameters by dereferencing data structure
   // note that we cast the void* into a struct thread_data* 
@@ -30,31 +31,34 @@ void* threadfunc(void* thread_param)
   rc = usleep(tdata->wait_to_obtain_ms*1000);
   if (rc != 0) {
     ERROR_LOG("usleep failed, returned %s\n", strerror(rc));  
-    return thread_param;
+    completion_error = true;
   }
 
   // obtain mutex
   rc = pthread_mutex_lock(tdata->mutex_pass_to_thread);
   if (rc != 0) {
     ERROR_LOG("pthread_mutex_lock failed, returned %s\n", strerror(rc));  
-    return thread_param;
+    completion_error = true;
   }
 
   // wait to release mutex
   rc = usleep(tdata->wait_to_release_ms*1000);
   if (rc != 0) {
     ERROR_LOG("usleep failed, returned %s\n", strerror(rc));  
-    return thread_param;
+    completion_error = true;
   }
   
   // release mutex
   rc = pthread_mutex_unlock(tdata->mutex_pass_to_thread);
   if (rc != 0) {
     ERROR_LOG("pthread_mutex_unlock failed, returned %s\n", strerror(rc));  
-    return thread_param;
+    completion_error = true;
   }
 
-  tdata->thread_complete_success = true;
+  if (completion_error == false) {
+    tdata->thread_complete_success = true;
+  }
+
   return thread_param;
 }
 
@@ -87,6 +91,7 @@ bool start_thread_obtaining_mutex(pthread_t *thread, pthread_mutex_t *mutex,int 
   rc = pthread_create(thread, NULL, threadfunc, (void*) thread_param);
   if (rc != 0) {
     ERROR_LOG("pthread_create fail, returned %s\n", strerror(rc));
+    free(thread_param); // Is this needed?
     return false;
   }
 
