@@ -1,7 +1,7 @@
 SRCS = $(wildcard *.c)
 OBJS = $(SRCS:.c=.o)
 CC = $(CROSS_COMPILE)gcc
-CFLAGS = -g -Wall -Werror 
+CFLAGS = -g -Wall -Werror
 LDFLAGS = 
 TARGET = aesdsocket
 
@@ -17,6 +17,7 @@ $(TARGET): $(OBJS)
 .PHONY: clean
 clean:
 	rm -f $(OBJS) $(TARGET)
+	rm -f valgrind.out.txt*
 
 debug:
 	make all

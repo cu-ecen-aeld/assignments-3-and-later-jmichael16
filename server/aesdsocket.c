@@ -36,6 +36,13 @@
   #define LOG(LOG_LEVEL, msg, ...) syslog(LOG_LEVEL, msg, ##__VA_ARGS__)  
 #endif
 
+#define PORT "9000"
+#define TEMPFILE "/var/tmp/aesdsocketdata"
+
+
+/* ============================================================================
+ *    FUNCTION HEADERS
+ * ===========================================================================*/
 
 /* @brief  registers signal handlers
  * @param  none
@@ -65,12 +72,39 @@ void cleanup();
  */
 char *get_ip_str(const struct sockaddr_in *sa, char *dst);
 
-/*
- * global socket variables and flags
+
+/* @brief  a finite state machine which sequences through states, guiding 
+ *         the flow through accepting a connection, reading a packet, writing 
+ *         the packet to tempfile, and then sending tempfile contents back 
+ *         through the socket connection
+ * @param  none
+ * @return -1 on error, 0 on success
  */
-struct addrinfo* server_addr = NULL;
-int sockfd = -1; 
-int peerfd = -1;
+int finite_state_machine();
+
+
+/* @brief  a writing wrapper utility which writes all bytes to fd
+ * @param  writestr, ptr to the string to write
+ * @param  len, number of bytes to write
+ * @return 0 on success, -1 on error
+ */
+int write_wrapper(int fd, char* writestr, int len);
+
+
+/* ============================================================================
+ *    GLOBALS
+ * ===========================================================================*/
+static struct addrinfo* server_addr = NULL;
+static int sockfd = -1; 
+static int peerfd = -1;
+static char *recv_buf = NULL;
+static int recv_buf_size = 0;
+
+
+
+/* ============================================================================
+ *      FUNCTION DEFINITIONS
+ *============================================================================*/
 
 /* 
  * @brief  the main function
@@ -79,7 +113,7 @@ int peerfd = -1;
  * @return 0 upon success, -1 on error
  */
 int main(int argc, char* argv[])
-{
+{ 
   int rc; 
   int daemonize_flag = 0;
 
@@ -110,12 +144,13 @@ int main(int argc, char* argv[])
 
   // get addrinfo
   rc = getaddrinfo( NULL,           // ip to connect to (NULL for loopback) 
-                    "9000",         // port per A5 requirements
+                    PORT,         // port per A5 requirements
                     &hints,         // hints, populated above
                     &server_addr    // return address for linked list
                     );
   if (rc != 0) {
     LOG(LOG_ERR, "getaddrinfo returned !=0"); perror("getaddrinfo()");
+    cleanup();
     return -1;
   }
 
@@ -128,12 +163,51 @@ int main(int argc, char* argv[])
     return -1;
   }
 
+  // set socket options
+  if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1},	sizeof(int)) < 0 ) {
+    perror("setsockopt()");
+    cleanup();
+    return -1;
+  } 
+
   // bind socket to the server_addr returned from getaddrinfo
   rc = bind(sockfd, server_addr->ai_addr, server_addr->ai_addrlen );
   if (rc == -1) {
     LOG(LOG_ERR, "bind returned -1"); perror("bind()");
     cleanup();
     return -1;
+  }
+  freeaddrinfo(server_addr); // no longer needed as we have sockfd 
+  server_addr = NULL;
+
+  if (daemonize_flag) {
+    // ignore signals
+    signal(SIGCHLD, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
+    pid_t pid = fork();
+    if (pid < 0) {
+      cleanup();
+      return -1;
+    }
+    if (pid > 0) {
+      // parent exits
+      exit(EXIT_SUCCESS); 
+    }
+
+    // create a new session and set process group ID
+    if (setsid() == -1) {
+      perror("setsid()");
+    }
+
+    // change working directory to root
+    chdir("/");
+
+    // redirect STDIOs to /dev/null
+    int devnull = open("/dev/null", O_RDWR);
+    dup2(devnull, STDIN_FILENO);
+    dup2(devnull, STDOUT_FILENO);
+    dup2(devnull, STDERR_FILENO);
+    close(devnull);
   }
 
   // listen on the socket
@@ -146,94 +220,137 @@ int main(int argc, char* argv[])
 
   while(1) 
   {
-    int looperror = 0;
-    struct sockaddr_in peer_addr;
-    socklen_t peer_addr_size = sizeof(peer_addr);
-    char peer_addr_str[INET_ADDRSTRLEN];
-    
-    // store file descriptor of accepted connection
-    peerfd = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
-    if (peerfd == -1) {
-      LOG(LOG_ERR, "accept returned -1"); perror("accept");
-      looperror = -1;
+    int ret = finite_state_machine();
+    if (ret == -1) {
+      cleanup();
+      return -1;
+    }
+  }
+
+  cleanup();
+  return 0; // should never return
+
+} // end main
+
+
+typedef enum states {
+  ACCEPTING_CONNECTIONS,
+  READ_PACKET,
+  WRITE_FILE_SOCKET_ECHO,
+  NUM_STATES
+} states_t;
+
+int finite_state_machine() 
+{
+  static states_t state = ACCEPTING_CONNECTIONS;
+  struct sockaddr_in peer_addr;
+  socklen_t peer_addr_size = sizeof(peer_addr);
+
+  switch(state)
+  {
+    case ACCEPTING_CONNECTIONS:
+    {  
+      LOG(LOG_INFO, "state: ACCEPTING_CONNECTIONS");
+      // store file descriptor of accepted connection 
+      peerfd = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
+      if (peerfd == -1) {
+        LOG(LOG_ERR, "accept returned -1"); perror("accept");
+        return -1;
+      } else {
+        char peer_addr_str[INET_ADDRSTRLEN];
+        get_ip_str(&peer_addr, peer_addr_str);
+        LOG(LOG_INFO, "Accepted connection from %s", peer_addr_str);
+        // reset recv_buf
+        recv_buf = realloc(recv_buf, 0);
+        recv_buf_size = 0;
+        state = READ_PACKET;
+      } 
+      break;
+
+    }
+
+    case READ_PACKET:
+    { 
+      LOG(LOG_INFO, "state: READ_PACKET");
+      int recv_temp_size = 256;
+      char recv_temp[recv_temp_size];
+
+      // read from socket until '\n' 
+      int ret = recv(peerfd, &recv_temp[0], recv_temp_size, 0);
+      LOG(LOG_INFO, "recv returned %d bytes", ret);
+      if (ret == -1 && errno != EINTR) {
+        LOG(LOG_ERR, "recv returned -1"); perror("recv()");
+        free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
+        return -1;
+      } else if (ret == 0) { // end of file (peer socket shutdown)
+        LOG(LOG_INFO, "peer socket shutdown");
+        state = ACCEPTING_CONNECTIONS; 
+        break;
+      } else if (ret > 0) {
+        recv_buf = realloc(recv_buf, recv_buf_size + ret);
+        memcpy(recv_buf + recv_buf_size, recv_temp, ret);
+        recv_buf_size += ret;
+        char* packet_delimiter = strchr(recv_temp, '\n');
+        if (packet_delimiter != NULL) {  // delimeter found
+          state = WRITE_FILE_SOCKET_ECHO;
+        }
+      }
       break;
     } 
 
-    get_ip_str(&peer_addr, peer_addr_str);
-    LOG(LOG_INFO, "Accepted connection from %s", peer_addr_str);
-
-    while(1)
+    case WRITE_FILE_SOCKET_ECHO:
     {
-      // initialize the recieve buffer
-      char *recv_buf = NULL;
-      int recv_buf_size = 0;
-
-      while(1) 
-      {
-        int recv_temp_size = 256;
-        char recv_temp[recv_temp_size];
-
-        // read from socket until '\n' 
-        int ret = recv(peerfd, &recv_temp[0], recv_temp_size, 0);
-        if (ret == -1 && errno != EINTR) {
-          LOG(LOG_ERR, "recv returned -1"); perror("recv()");
-          break;
-        }
-        if (ret > 0) {
-          recv_buf = realloc(recv_buf, recv_buf_size + ret);
-        }
-        memcpy(recv_buf + recv_buf_size, recv_temp, ret);
-        recv_buf_size += ret;
-          
-        // if the temporary buffer holds '\n', then we can flush 
-        // recv_buf to file
-        char* packet_delimiter = strchr(recv_temp, '\n');
-        if (packet_delimiter != NULL) {
-          // delimeter found
-          break;
-        }
-      }
-
+      LOG(LOG_INFO, "state: WRITE_FILE_SOCKET_ECHO");
       // write to file
       int tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
       if (tempfd == -1) {
         LOG(LOG_ERR, "open() returned -1"); perror("open()");
-        looperror = -2;
-        break;
+        free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
+        return -1;
       }
       if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_size)) {
-        LOG(LOG_ERR, "write_wrapper returned -1");
-        looperror = -3;
-        break;
-      }
+        free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
+        close(tempfd);
+        return -1;
+      } 
 
-      // free the recv buffer
-      free(recv_buf);
+      // realloc the recieve buffer size to 0
+      recv_buf = realloc(recv_buf, 0); recv_buf_size = 0;
 
-      // write file contents to socket
-      // get length of file
-      int templen = lseek(tempfd, 0, SEEK_END);
+      // echo entire file contents to socket
       lseek(tempfd, 0, SEEK_SET);
-      char *buf = malloc(templen);
+      char chunk[128];
+      int nread = -1;
+      while (1) {
+        nread = read(tempfd, chunk, 128);
+        if (nread == -1 && errno != EINTR) {
+          LOG(LOG_ERR, "nread() returned -1"); perror("read()");
+          close(tempfd);
+          return -1;
+        } else if (nread == 0) {
+          LOG(LOG_INFO, "EOF detected");
+          break;
+        }
+        LOG(LOG_INFO, "forward to socket");
+        write_wrapper(peerfd, chunk, nread);
+      }
       
-      free(buf);
       close(tempfd);
-      
+      state = READ_PACKET;
+      break;
     }
 
-  } // end while
+    default: 
+    {
+      LOG(LOG_ERR, "OMG how did I get here?");
+      return -1;
+    }
+    
+  } // end switch 
 
-  if (looperror < 0) 
-  {
-    LOG(LOG_ERR, "looperror returned %d", looperror);
-    cleanup();
-    return -1;
-  }
-
-  cleanup();
   return 0;
+} // end finite_state_machine
 
-} // end main
 
 int write_wrapper(int fd, char* writestr, int len) 
 {
@@ -241,13 +358,14 @@ int write_wrapper(int fd, char* writestr, int len)
   while(len) {
     written = write(fd, writestr, len);
     if (written == -1 && errno != EINTR) {
+      LOG(LOG_ERROR, "write() returned -1"); perror("write()");
       return -1;
     }
     len -= written;
     writestr += written;
   }
 
-  return len;
+  return 0; 
 }
 
 char *get_ip_str(const struct sockaddr_in *sa, char *dst) 
@@ -266,6 +384,15 @@ void cleanup()
     freeaddrinfo(server_addr);
   }
 
+  // check if file exists and if so, delete it
+  if (access(TEMPFILE, F_OK) == 0)  {
+    remove(TEMPFILE);
+  }
+
+  if (recv_buf != NULL) {
+    free(recv_buf);
+  }
+
   if (sockfd < 0) {
     close(sockfd);
   }
@@ -273,7 +400,7 @@ void cleanup()
   if (peerfd < 0) {
     close(peerfd);
   }
-  
+
 }
 
 static int register_signal_handlers() 
@@ -294,13 +421,8 @@ static int register_signal_handlers()
 static void signal_handler(int signo)
 {
   LOG(LOG_WARN, "Caught signal, exiting");
-
-  // do any cleanup steps
   cleanup();
-   
-  // delete /var/tmp/aesdsocket
-
   exit(EXIT_SUCCESS);
-
+  
 } // end signal_handler
 
