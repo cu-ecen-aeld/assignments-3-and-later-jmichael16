@@ -21,6 +21,7 @@
 #include <syslog.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>    
 #include <arpa/inet.h>
@@ -170,12 +171,12 @@ int main(int argc, char* argv[])
       while(1) 
       {
         int recv_temp_size = 256;
-        char recv_temp[recv_temp_buf_size];
+        char recv_temp[recv_temp_size];
 
         // read from socket until '\n' 
-        int ret = recv(peerfd, &recv_temp[0], recv_temp_size);
+        int ret = recv(peerfd, &recv_temp[0], recv_temp_size, 0);
         if (ret == -1 && errno != EINTR) {
-          LOG("recv returned -1"); perror("recv()");
+          LOG(LOG_ERR, "recv returned -1"); perror("recv()");
           break;
         }
         if (ret > 0) {
@@ -196,12 +197,12 @@ int main(int argc, char* argv[])
       // write to file
       int tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
       if (tempfd == -1) {
-        LOG("open() returned -1"); perror("open()");
+        LOG(LOG_ERR, "open() returned -1"); perror("open()");
         looperror = -2;
         break;
       }
       if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_size)) {
-        LOG("write_wrapper returned -1");
+        LOG(LOG_ERR, "write_wrapper returned -1");
         looperror = -3;
         break;
       }
@@ -224,7 +225,7 @@ int main(int argc, char* argv[])
 
   if (looperror < 0) 
   {
-    LOG("looperror returned %d", looperror);
+    LOG(LOG_ERR, "looperror returned %d", looperror);
     cleanup();
     return -1;
   }
@@ -236,6 +237,7 @@ int main(int argc, char* argv[])
 
 int write_wrapper(int fd, char* writestr, int len) 
 {
+  int written = 0;
   while(len) {
     written = write(fd, writestr, len);
     if (written == -1 && errno != EINTR) {
