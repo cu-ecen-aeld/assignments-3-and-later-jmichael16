@@ -27,4 +27,4 @@ debug:
          --track-origins=yes \
          --verbose \
          --log-file=valgrind-out.txt \
-         ./aesdsocket -d
+         ./aesdsocket 

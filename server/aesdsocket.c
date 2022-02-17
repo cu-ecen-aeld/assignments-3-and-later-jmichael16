@@ -277,7 +277,7 @@ int finite_state_machine()
 
       // read from socket until '\n' 
       int ret = recv(peerfd, &recv_temp[0], recv_temp_size, 0);
-      LOG(LOG_INFO, "recv returned %d bytes", ret);
+      //LOG(LOG_INFO, "recv returned %d bytes", ret);
       if (ret == -1 && errno != EINTR) {
         LOG(LOG_ERR, "recv returned -1"); perror("recv()");
         free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
@@ -300,7 +300,7 @@ int finite_state_machine()
 
     case WRITE_FILE_SOCKET_ECHO:
     {
-      LOG(LOG_INFO, "state: WRITE_FILE_SOCKET_ECHO");
+      //LOG(LOG_INFO, "state: WRITE_FILE_SOCKET_ECHO");
       // write to file
       int tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
       if (tempfd == -1) {
@@ -324,14 +324,14 @@ int finite_state_machine()
       while (1) {
         nread = read(tempfd, chunk, 128);
         if (nread == -1 && errno != EINTR) {
-          LOG(LOG_ERR, "nread() returned -1"); perror("read()");
+          //LOG(LOG_ERR, "nread() returned -1"); perror("read()");
           close(tempfd);
           return -1;
         } else if (nread == 0) {
           LOG(LOG_INFO, "EOF detected");
           break;
         }
-        LOG(LOG_INFO, "forward to socket");
+        //LOG(LOG_INFO, "forward to socket");
         write_wrapper(peerfd, chunk, nread);
       }
       
