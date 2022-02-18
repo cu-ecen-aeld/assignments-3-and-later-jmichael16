@@ -29,7 +29,7 @@
 
 // by default logs should go to syslog, but can be optionally redirected 
 // to printf for debug purposes by setting macro below to 1
-#define REDIRECT_LOG_TO_PRINTF (1)
+#define REDIRECT_LOG_TO_PRINTF (0)
 #if REDIRECT_LOG_TO_PRINTF
   #define LOG(LOG_LEVEL, msg, ...) printf(msg "\n", ##__VA_ARGS__)
 #else
@@ -358,7 +358,7 @@ int write_wrapper(int fd, char* writestr, int len)
   while(len) {
     written = write(fd, writestr, len);
     if (written == -1 && errno != EINTR) {
-      LOG(LOG_ERROR, "write() returned -1"); perror("write()");
+      LOG(LOG_ERR, "write() returned -1"); perror("write()");
       return -1;
     }
     len -= written;
@@ -420,7 +420,7 @@ static int register_signal_handlers()
 
 static void signal_handler(int signo)
 {
-  LOG(LOG_WARN, "Caught signal, exiting");
+  LOG(LOG_WARNING, "Caught signal, exiting");
   cleanup();
   exit(EXIT_SUCCESS);
   
