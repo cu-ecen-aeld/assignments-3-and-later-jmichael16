@@ -17,11 +17,11 @@ $(TARGET): $(OBJS)
 .PHONY: clean
 clean:
 	rm -f $(OBJS) $(TARGET)
-	rm -f valgrind.out.txt*
+	rm -f valgrind*
 
 debug:
 	make all
-	rm -f valgrind.out.txt*
+	rm -f valgrind*
 	valgrind --leak-check=full \
          --show-leak-kinds=all \
          --track-origins=yes \

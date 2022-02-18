@@ -4,11 +4,11 @@
 case "$1" in
   start) 
     echo "Starting aesdsocket"
-    start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -d
+    start-stop-daemon --start --name aesdsocket --exec /usr/bin/aesdsocket -- -d
     ;;
   stop)
     echo "Stopping aesdsocket"
-    start-stop-daemon -K -s SIGTERM aesdsocket
+    start-stop-daemon --stop --signal SIGTERM --name aesdsocket
     ;;
   *)
     echo "Usage: $0 {start|stop}"

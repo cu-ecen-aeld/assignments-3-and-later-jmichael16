@@ -250,7 +250,7 @@ int finite_state_machine()
   {
     case ACCEPTING_CONNECTIONS:
     {  
-      LOG(LOG_INFO, "state: ACCEPTING_CONNECTIONS");
+      //LOG(LOG_INFO, "state: ACCEPTING_CONNECTIONS");
       // store file descriptor of accepted connection 
       peerfd = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
       if (peerfd == -1) {
@@ -271,7 +271,7 @@ int finite_state_machine()
 
     case READ_PACKET:
     { 
-      LOG(LOG_INFO, "state: READ_PACKET");
+      //LOG(LOG_INFO, "state: READ_PACKET");
       int recv_temp_size = 256;
       char recv_temp[recv_temp_size];
 
@@ -283,7 +283,7 @@ int finite_state_machine()
         free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
         return -1;
       } else if (ret == 0) { // end of file (peer socket shutdown)
-        LOG(LOG_INFO, "peer socket shutdown");
+        LOG(LOG_INFO, "Peer socket shutdown");
         state = ACCEPTING_CONNECTIONS; 
         break;
       } else if (ret > 0) {
@@ -328,7 +328,7 @@ int finite_state_machine()
           close(tempfd);
           return -1;
         } else if (nread == 0) {
-          LOG(LOG_INFO, "EOF detected");
+          LOG(LOG_INFO, "EOF detected, socket send complete");
           break;
         }
         //LOG(LOG_INFO, "forward to socket");
