@@ -9,27 +9,34 @@
  * signals. 
  * 
  * @author Jake Michael, jami1063@colorado.edu
- * @resources various code is leveraged from Beej's Guide to Network Programming:
- *            https://beej.us/guide/bgnet/html/
+ * @resources 
+ * (+)  various code is leveraged from Beej's Guide to Network Programming:
+ * https://beej.us/guide/bgnet/html/
+ * (+)  used example code for FreeBSD queue.h as found here: 
+ * https://blog.taborkelly.net/programming/c/2016/01/09/sys-queue-example.html
  *---------------------------------------------------------------------------*/
 
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <time.h>
 #include <signal.h>
 #include <syslog.h>
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <poll.h>
 #include <sys/types.h>
 #include <sys/socket.h>    
 #include <arpa/inet.h>
 #include <netdb.h>
+#include "queue.h"
 
 // by default logs should go to syslog, but can be optionally redirected 
 // to printf for debug purposes by setting macro below to 1
-#define REDIRECT_LOG_TO_PRINTF (0)
+#define REDIRECT_LOG_TO_PRINTF (1)
 #if REDIRECT_LOG_TO_PRINTF
   #define LOG(LOG_LEVEL, msg, ...) printf(msg "\n", ##__VA_ARGS__)
 #else
@@ -39,6 +46,27 @@
 #define PORT "9000"
 #define TEMPFILE "/var/tmp/aesdsocketdata"
 
+/* ============================================================================
+ *    GLOBALS
+ * ===========================================================================*/
+static int sockfd = -1; // socket file descriptor
+static int tempfd = -1; // TEMPFILE file descriptor
+static volatile bool global_abort = false;
+typedef TAILQ_HEAD(head_s, node) head_t;
+
+/* ============================================================================
+ *    THREAD VARIABLES AND SYNCHRONIZATION
+ * ===========================================================================*/
+pthread_mutex_t file_lock = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct {
+  int peerfd;
+} thread_params_t;
+
+typedef struct node {
+  pthread_t thread;
+  TAILQ_ENTRY(node) nodes;
+} node_t;
 
 /* ============================================================================
  *    FUNCTION HEADERS
@@ -58,29 +86,12 @@ static int register_signal_handlers();
 static void signal_handler(int signo);
 
 
-/* @brief  cleans up upon error or before exit/return
- * @param  none
- * @return none
- */
-void cleanup();
-
-
 /* @brief  gets human readable ip address string (assuming IPv4)
  * @param  sa, ptr to sockaddr_in to convert
  * @param  dst, ptr to destination buffer with minsize IPNET_ADDRSTRLEN
  * @return dst or NULL if error
  */
-char *get_ip_str(const struct sockaddr_in *sa, char *dst);
-
-
-/* @brief  a finite state machine which sequences through states, guiding 
- *         the flow through accepting a connection, reading a packet, writing 
- *         the packet to tempfile, and then sending tempfile contents back 
- *         through the socket connection
- * @param  none
- * @return -1 on error, 0 on success
- */
-int finite_state_machine();
+static char *get_ip_str(const struct sockaddr_in *sa, char *dst);
 
 
 /* @brief  a writing wrapper utility which writes all bytes to fd
@@ -88,17 +99,28 @@ int finite_state_machine();
  * @param  len, number of bytes to write
  * @return 0 on success, -1 on error
  */
-int write_wrapper(int fd, char* writestr, int len);
+static int write_wrapper(int fd, char* writestr, int len);
 
 
-/* ============================================================================
- *    GLOBALS
- * ===========================================================================*/
-static struct addrinfo* server_addr = NULL;
-static int sockfd = -1; 
-static int peerfd = -1;
-static char *recv_buf = NULL;
-static int recv_buf_size = 0;
+/* @brief  turns the process into a daemon
+ * @param  none
+ * @return int, 0 on success, -1 on error
+ */
+static int daemonize_proc();
+
+
+/* @brief  handles a socket connection
+ * @param  void* param, ptr to data to pass into thread
+ * @return void*, a return pointer
+ */
+void* connection_thread(void *param);
+
+
+/* @brief  handles printing timestamp
+ * @param  void* param, ptr to data to pass into thread
+ * @return void*, a return pointer
+ */
+void* timestamp_thread(void *param);
 
 
 
@@ -116,7 +138,8 @@ int main(int argc, char* argv[])
 { 
   int rc; 
   int daemonize_flag = 0;
-
+  struct addrinfo* server_addr = NULL;
+  
   // handle daemonize flag from args
   if (argc >= 2) {
     if (!strcmp(argv[1], "-d")) {
@@ -133,7 +156,11 @@ int main(int argc, char* argv[])
 
   // register signal handlers
   rc = register_signal_handlers();
-  if (rc == -1) exit(EXIT_FAILURE);
+  if (rc == -1) {
+    LOG(LOG_ERR, "could not register signal handlers");
+    exit(EXIT_FAILURE);
+  } 
+
 
   // initialize hints struct
   struct addrinfo hints;
@@ -150,7 +177,6 @@ int main(int argc, char* argv[])
                     );
   if (rc != 0) {
     LOG(LOG_ERR, "getaddrinfo returned !=0"); perror("getaddrinfo()");
-    cleanup();
     return -1;
   }
 
@@ -159,14 +185,14 @@ int main(int argc, char* argv[])
                   server_addr->ai_protocol);
   if (sockfd == -1) {
     LOG(LOG_ERR, "socket returned -1"); perror("socket()");
-    cleanup();
+    freeaddrinfo(server_addr); 
     return -1;
   }
 
   // set socket options
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1},	sizeof(int)) < 0 ) {
     perror("setsockopt()");
-    cleanup();
+    freeaddrinfo(server_addr); 
     return -1;
   } 
 
@@ -174,191 +200,304 @@ int main(int argc, char* argv[])
   rc = bind(sockfd, server_addr->ai_addr, server_addr->ai_addrlen );
   if (rc == -1) {
     LOG(LOG_ERR, "bind returned -1"); perror("bind()");
-    cleanup();
+    freeaddrinfo(server_addr); 
     return -1;
   }
   freeaddrinfo(server_addr); // no longer needed as we have sockfd 
-  server_addr = NULL;
 
   if (daemonize_flag) {
-    // ignore signals
-    signal(SIGCHLD, SIG_IGN);
-    signal(SIGHUP, SIG_IGN);
-    pid_t pid = fork();
-    if (pid < 0) {
-      cleanup();
+    if ( (rc = daemonize_proc()) == -1) {
+      LOG(LOG_ERR, "process cannot be daemonized");
       return -1;
     }
-    if (pid > 0) {
-      // parent exits
-      exit(EXIT_SUCCESS); 
-    }
-
-    // create a new session and set process group ID
-    if (setsid() == -1) {
-      perror("setsid()");
-    }
-
-    // change working directory to root
-    chdir("/");
-
-    // redirect STDIOs to /dev/null
-    int devnull = open("/dev/null", O_RDWR);
-    dup2(devnull, STDIN_FILENO);
-    dup2(devnull, STDOUT_FILENO);
-    dup2(devnull, STDERR_FILENO);
-    close(devnull);
   }
 
   // listen on the socket
-  rc = listen(sockfd, 5); // listen, allow up to 5 connections to queue
+  rc = listen(sockfd, 10); // listen, allow connections to queue
   if (rc == -1)  {
     LOG(LOG_ERR, "listen returned -1"); perror("listen()");
-    cleanup();
     return -1;
   } 
 
-  while(1) 
-  {
-    int ret = finite_state_machine();
-    if (ret == -1) {
-      cleanup();
-      return -1;
-    }
+  pthread_t tsthread;
+  rc = pthread_create(&tsthread, NULL, timestamp_thread, NULL);
+  if (rc != 0) {
+    LOG(LOG_ERR, "timestamp thread could not be created, returned %d", rc);
+    return -1;
   }
 
-  cleanup();
-  return 0; // should never return
+  // initialize linked-list
+  head_t head;
+  TAILQ_INIT(&head);
+
+  struct pollfd pfd[1];
+  pfd[0].fd = sockfd;
+  pfd[0].events = POLLIN;
+  int timeout = 100;
+
+  while(!global_abort) 
+  {
+    int peerfd_temp = -1;
+    int thread_count = 0;
+    int rc = -1;
+    struct sockaddr_in peer_addr;
+    socklen_t peer_addr_size = sizeof(peer_addr);
+
+    poll(pfd, 1, timeout);
+    if (pfd[0].revents != POLLIN) {
+      continue;
+    }
+    // store file descriptor of accepted connection 
+    peerfd_temp = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
+    if (peerfd_temp < 0) {
+      LOG(LOG_ERR, "accept returned <0"); perror("accept");
+      continue;
+    } else {
+      // print human-readable IP address
+      char peer_addr_str[INET_ADDRSTRLEN];
+      get_ip_str(&peer_addr, peer_addr_str);
+      LOG(LOG_INFO, "Accepted connection from %s, spawning new thread", peer_addr_str);
+
+      // malloc all the things
+      struct node* new_node = malloc(sizeof(struct node));
+      thread_params_t* new_params = malloc(sizeof(thread_params_t));
+      if ( !new_node || !new_params ) {
+        LOG(LOG_ERR, "malloc fail"); perror("malloc");
+        exit(EXIT_FAILURE); // we cannot recover from this
+      }
+
+      // populate all the things
+      new_params->peerfd = peerfd_temp;
+      // spawn new thread
+      rc = pthread_create(&(new_node->thread), NULL, connection_thread, (void*) new_params);
+      if (rc != 0) {
+        LOG(LOG_ERR, "pthread_create returned %d", rc);
+        shutdown(peerfd_temp, SHUT_RDWR);
+        close(peerfd_temp);
+        free(new_params); free(new_node);
+        continue;
+      }
+      LOG(LOG_INFO, "Thread spawn success");
+      TAILQ_INSERT_TAIL(&head, new_node, nodes); 
+      thread_count++;
+    } 
+  } // end while()
+
+  shutdown(sockfd, SHUT_RDWR);
+  close(sockfd);
+
+  // join and cleanup all the socket threads
+  struct node* anode = NULL;
+  void *retval = NULL;
+  while (!TAILQ_EMPTY(&head)) {
+    // get first element, join thread remove from tailqueue and free
+    anode = TAILQ_FIRST(&head);
+    LOG(LOG_INFO, "joining");
+    rc = pthread_join(anode->thread, &retval);
+    LOG(LOG_INFO, "pthread_join returned %d", rc);
+    TAILQ_REMOVE(&head, anode, nodes);
+    free(anode);
+    anode = NULL;
+  }
+
+  // join timestamp thread
+  pthread_join(tsthread, &retval);
+
+  if (access(TEMPFILE, F_OK) == 0) {
+    remove(TEMPFILE); // no lock necessary, all the threads have joined
+  }
+  
+  return 0; 
 
 } // end main
 
 
-typedef enum states {
-  ACCEPTING_CONNECTIONS,
-  READ_PACKET,
-  WRITE_FILE_SOCKET_ECHO,
-  NUM_STATES
-} states_t;
-
-int finite_state_machine() 
+void* connection_thread(void* params) 
 {
-  static states_t state = ACCEPTING_CONNECTIONS;
-  struct sockaddr_in peer_addr;
-  socklen_t peer_addr_size = sizeof(peer_addr);
+  // copy value from params
+  int peerfd = ((thread_params_t*) params)->peerfd;
+  free(params);
 
-  switch(state)
+  char *recv_buf;
+  int recv_buf_size = 0;
+
+  while(!global_abort) // continuously read/write 
   {
-    case ACCEPTING_CONNECTIONS:
-    {  
-      //LOG(LOG_INFO, "state: ACCEPTING_CONNECTIONS");
-      // store file descriptor of accepted connection 
-      peerfd = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
-      if (peerfd == -1) {
-        LOG(LOG_ERR, "accept returned -1"); perror("accept");
-        return -1;
-      } else {
-        char peer_addr_str[INET_ADDRSTRLEN];
-        get_ip_str(&peer_addr, peer_addr_str);
-        LOG(LOG_INFO, "Accepted connection from %s", peer_addr_str);
-        // reset recv_buf
-        recv_buf = realloc(recv_buf, 0);
-        recv_buf_size = 0;
-        state = READ_PACKET;
-      } 
-      break;
 
-    }
-
-    case READ_PACKET:
-    { 
-      //LOG(LOG_INFO, "state: READ_PACKET");
+    while(!global_abort) // read from socket until '\n' 
+    {
       int recv_temp_size = 256;
       char recv_temp[recv_temp_size];
-
-      // read from socket until '\n' 
       int ret = recv(peerfd, &recv_temp[0], recv_temp_size, 0);
       //LOG(LOG_INFO, "recv returned %d bytes", ret);
       if (ret == -1 && errno != EINTR) {
         LOG(LOG_ERR, "recv returned -1"); perror("recv()");
-        free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
-        return -1;
+        goto handle_errors;
       } else if (ret == 0) { // end of file (peer socket shutdown)
         LOG(LOG_INFO, "Peer socket shutdown");
-        state = ACCEPTING_CONNECTIONS; 
-        break;
+        goto handle_errors;
       } else if (ret > 0) {
         recv_buf = realloc(recv_buf, recv_buf_size + ret);
         memcpy(recv_buf + recv_buf_size, recv_temp, ret);
         recv_buf_size += ret;
         char* packet_delimiter = strchr(recv_temp, '\n');
         if (packet_delimiter != NULL) {  // delimeter found
-          state = WRITE_FILE_SOCKET_ECHO;
-        }
-      }
-      break;
-    } 
-
-    case WRITE_FILE_SOCKET_ECHO:
-    {
-      //LOG(LOG_INFO, "state: WRITE_FILE_SOCKET_ECHO");
-      // write to file
-      int tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
-      if (tempfd == -1) {
-        LOG(LOG_ERR, "open() returned -1"); perror("open()");
-        free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
-        return -1;
-      }
-      if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_size)) {
-        free(recv_buf); recv_buf_size = 0; recv_buf = NULL;
-        close(tempfd);
-        return -1;
-      } 
-
-      // realloc the recieve buffer size to 0
-      recv_buf = realloc(recv_buf, 0); recv_buf_size = 0;
-
-      // echo entire file contents to socket
-      lseek(tempfd, 0, SEEK_SET);
-      char chunk[128];
-      int nread = -1;
-      while (1) {
-        nread = read(tempfd, chunk, 128);
-        if (nread == -1 && errno != EINTR) {
-          //LOG(LOG_ERR, "nread() returned -1"); perror("read()");
-          close(tempfd);
-          return -1;
-        } else if (nread == 0) {
-          LOG(LOG_INFO, "EOF detected, socket send complete");
           break;
         }
-        //LOG(LOG_INFO, "forward to socket");
-        write_wrapper(peerfd, chunk, nread);
+      }
+
+    } // end while()
+
+    if (global_abort) goto handle_errors;
+
+    // write to file
+    // wait for the lock
+    pthread_mutex_lock(&file_lock);
+    tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+    if (tempfd == -1) {
+      LOG(LOG_ERR, "open() returned -1"); perror("open()");
+      goto handle_errors;
+    }
+    if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_size)) {
+      LOG(LOG_WARN, "TESTING");
+      goto handle_errors;
+    } 
+
+    recv_buf = realloc(recv_buf, 0); recv_buf_size = 0;
+
+    // echo entire file contents to socket
+    lseek(tempfd, 0, SEEK_SET);
+    int chunk_size = 256;
+    char chunk[chunk_size];
+    int nread = -1;
+
+    while (!global_abort) 
+    {
+      nread = read(tempfd, chunk, chunk_size);
+      if (nread == -1 && errno != EINTR) {
+        LOG(LOG_ERR, "read() returned -1"); perror("read()");
+        goto handle_errors;
+      } else if (nread == 0) {
+        LOG(LOG_INFO, "EOF detected, socket send complete");
+        break;
+      }
+      if (-1 == write_wrapper(peerfd, chunk, nread)) {
+        goto handle_errors;
+      }
+    } // end while()
+
+    close(tempfd);
+    pthread_mutex_unlock(&file_lock);
+
+  } // end while()
+
+  shutdown(peerfd, SHUT_RDWR);
+  close(peerfd);
+  pthread_exit(NULL);
+
+handle_errors:
+  if (recv_buf != NULL) free(recv_buf);
+  close(tempfd);
+  pthread_mutex_unlock(&file_lock);
+  shutdown(peerfd, SHUT_RDWR);
+  close(peerfd);
+  pthread_exit(NULL);
+
+} // end connection_thread
+
+
+void* timestamp_thread(void *param) 
+{
+  char timestr[128];
+  struct tm *timestamp;
+  time_t t;
+  t = time(NULL);
+  const struct timespec sleep_time = { .tv_sec = 1, .tv_nsec = 0 };
+  int loopcnt = 0;
+
+  while(!global_abort) 
+  {
+    if (loopcnt%10 == 0) {
+      memset(timestr, 0, 128);
+      timestamp = localtime(&t);
+      if (timestamp == NULL) {
+        LOG(LOG_ERR, "localtime returned NULL");
+        pthread_exit(NULL);
+      }
+      if(strftime(timestr, sizeof(timestr), "timestamp:%a, %d %b %Y %T %z\n", timestamp) == 0) {
+        LOG(LOG_ERR, "strftime returned 0");
+        pthread_exit(NULL);
+      }
+
+      pthread_mutex_lock(&file_lock);
+      tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+      if (tempfd == -1) {
+        LOG(LOG_ERR, "timestamp_thread open() returned -1"); perror("open()");
+        pthread_mutex_unlock(&file_lock);
+        break;
+      }
+      if (-1 == write_wrapper(tempfd, timestr, strlen(timestr))) {
+        LOG(LOG_ERR, "timestamp_thread write_wrapper fail");
+        close(tempfd);
+        pthread_mutex_unlock(&file_lock);
+        break;
       }
       
       close(tempfd);
-      state = READ_PACKET;
-      break;
+      pthread_mutex_unlock(&file_lock);
+      nanosleep(&sleep_time, NULL);
     }
-
-    default: 
+    else 
     {
-      LOG(LOG_ERR, "OMG how did I get here?");
-      return -1;
+      nanosleep(&sleep_time, NULL);
     }
-    
-  } // end switch 
+    loopcnt++;
+  } // end while()
 
+  pthread_exit(NULL);
+}
+
+
+static int daemonize_proc() 
+{
+  // ignore signals
+  signal(SIGCHLD, SIG_IGN);
+  signal(SIGHUP, SIG_IGN);
+  pid_t pid = fork();
+  if (pid < 0) {
+    return -1;
+  }
+  if (pid > 0) {
+    // parent exits
+    exit(EXIT_SUCCESS); 
+  }
+
+  // create a new session and set process group ID
+  if (setsid() == -1) {
+    perror("setsid()");
+  }
+
+  // change working directory to root
+  chdir("/");
+
+  // redirect STDIOs to /dev/null
+  int devnull = open("/dev/null", O_RDWR);
+  dup2(devnull, STDIN_FILENO);
+  dup2(devnull, STDOUT_FILENO);
+  dup2(devnull, STDERR_FILENO);
+  close(devnull);
   return 0;
-} // end finite_state_machine
+}
 
 
-int write_wrapper(int fd, char* writestr, int len) 
+static int write_wrapper(int fd, char* writestr, int len) 
 {
   int written = 0;
   while(len) {
     written = write(fd, writestr, len);
     if (written == -1 && errno != EINTR) {
       LOG(LOG_ERR, "write() returned -1"); perror("write()");
+      LOG(LOG_ERR, "fd %d", fd); 
       return -1;
     }
     len -= written;
@@ -368,7 +507,7 @@ int write_wrapper(int fd, char* writestr, int len)
   return 0; 
 }
 
-char *get_ip_str(const struct sockaddr_in *sa, char *dst) 
+static char *get_ip_str(const struct sockaddr_in *sa, char *dst) 
 {
   if (dst == NULL)
     return NULL;
@@ -377,31 +516,6 @@ char *get_ip_str(const struct sockaddr_in *sa, char *dst)
   return dst;
 }
 
-
-void cleanup() 
-{
-  if (server_addr != NULL) {
-    freeaddrinfo(server_addr);
-  }
-
-  // check if file exists and if so, delete it
-  if (access(TEMPFILE, F_OK) == 0)  {
-    remove(TEMPFILE);
-  }
-
-  if (recv_buf != NULL) {
-    free(recv_buf);
-  }
-
-  if (sockfd < 0) {
-    close(sockfd);
-  }
-
-  if (peerfd < 0) {
-    close(peerfd);
-  }
-
-}
 
 static int register_signal_handlers() 
 {
@@ -420,9 +534,7 @@ static int register_signal_handlers()
 
 static void signal_handler(int signo)
 {
-  LOG(LOG_WARNING, "Caught signal, exiting");
-  cleanup();
-  exit(EXIT_SUCCESS);
-  
+  LOG(LOG_WARNING, "Caught signal, setting abort flag");
+  global_abort = true;
 } // end signal_handler
 

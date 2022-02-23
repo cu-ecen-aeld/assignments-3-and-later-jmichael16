@@ -1,18 +1,24 @@
 SRCS = $(wildcard *.c)
 OBJS = $(SRCS:.c=.o)
-CC = $(CROSS_COMPILE)gcc
-CFLAGS = -g -Wall -Werror
-LDFLAGS = 
+
+ifeq ($(CC),)
+	CC = $(CROSS_COMPILE)gcc
+endif
+
+ifeq ($(CFLAGS),)
+	CFLAGS = -g -Wall -Werror
+endif 
+
+ifeq ($(LDFLAGS),)
+	LDFLAGS = -pthread -lrt
+endif 
+
 TARGET = aesdsocket
-
-default: $(TARGET)
 all: $(TARGET)
+default: $(TARGET)
 
-$(TARGET): $(OBJS) 
-	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
-
-%.o : %.c 
-	$(CC) $(CFLAGS) -c $^
+$(TARGET): $(SRCS) 
+	$(CC) $(CFLAGS) $^ -o $@ $(INCLUDES) $(LDFLAGS)
 
 .PHONY: clean
 clean:
