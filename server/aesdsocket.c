@@ -359,7 +359,6 @@ void* connection_thread(void* params)
       goto handle_errors;
     }
     if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_size)) {
-      LOG(LOG_WARN, "TESTING");
       goto handle_errors;
     } 
 
