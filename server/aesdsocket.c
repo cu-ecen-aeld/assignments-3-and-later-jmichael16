@@ -140,6 +140,11 @@ int main(int argc, char* argv[])
   int daemonize_flag = 0;
   struct addrinfo* server_addr = NULL;
   
+  // if we can access the temfile, it is stale
+  if (access(TEMPFILE, F_OK) == 0) {
+    remove(TEMPFILE); // no lock necessary, all the threads have joined
+  }
+
   // handle daemonize flag from args
   if (argc >= 2) {
     if (!strcmp(argv[1], "-d")) {
@@ -160,7 +165,6 @@ int main(int argc, char* argv[])
     LOG(LOG_ERR, "could not register signal handlers");
     exit(EXIT_FAILURE);
   } 
-
 
   // initialize hints struct
   struct addrinfo hints;
