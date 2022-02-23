@@ -287,14 +287,13 @@ int main(int argc, char* argv[])
   close(sockfd);
 
   // join and cleanup all the socket threads
+  LOG(LOG_INFO, "Joining all threads");
   struct node* anode = NULL;
   void *retval = NULL;
   while (!TAILQ_EMPTY(&head)) {
     // get first element, join thread remove from tailqueue and free
     anode = TAILQ_FIRST(&head);
-    LOG(LOG_INFO, "joining");
     rc = pthread_join(anode->thread, &retval);
-    LOG(LOG_INFO, "pthread_join returned %d", rc);
     TAILQ_REMOVE(&head, anode, nodes);
     free(anode);
     anode = NULL;
@@ -406,30 +405,31 @@ handle_errors:
 
 } // end connection_thread
 
-
 void* timestamp_thread(void *param) 
 {
   char timestr[128];
   struct tm *timestamp;
   time_t t;
-  t = time(NULL);
-  const struct timespec sleep_time = { .tv_sec = 1, .tv_nsec = 0 };
-  int loopcnt = 0;
+  struct timespec start_time = { 0, 0 };
+  int rc;
 
   while(!global_abort) 
   {
-    if (loopcnt%10 == 0) {
+      if (-1 == clock_gettime(CLOCK_MONOTONIC, &start_time)) {
+        LOG(LOG_ERR, "clock gettime returned -1"); perror("clock_gettime");
+      }
       memset(timestr, 0, 128);
+      t = time(NULL);
       timestamp = localtime(&t);
       if (timestamp == NULL) {
         LOG(LOG_ERR, "localtime returned NULL");
         pthread_exit(NULL);
       }
-      if(strftime(timestr, sizeof(timestr), "timestamp:%a, %d %b %Y %T %z\n", timestamp) == 0) {
+      if(strftime(timestr, sizeof(timestr), 
+         "timestamp:%a, %d %b %Y %T %z\n", timestamp) == 0) {
         LOG(LOG_ERR, "strftime returned 0");
         pthread_exit(NULL);
       }
-
       pthread_mutex_lock(&file_lock);
       tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
       if (tempfd == -1) {
@@ -446,13 +446,15 @@ void* timestamp_thread(void *param)
       
       close(tempfd);
       pthread_mutex_unlock(&file_lock);
-      nanosleep(&sleep_time, NULL);
-    }
-    else 
-    {
-      nanosleep(&sleep_time, NULL);
-    }
-    loopcnt++;
+      start_time.tv_sec += 10;
+      if ( (rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &start_time, NULL)) != 0) {
+        if (errno == EINTR) { // signal handler interrupt
+          break;
+        }
+        else {
+          LOG(LOG_ERR, "clock_nanosleep error %d", rc);
+        }
+      }
   } // end while()
 
   pthread_exit(NULL);
