@@ -223,6 +223,13 @@ int main(int argc, char* argv[])
     return -1;
   } 
 
+  // open tempfile with descriptor tempfd
+  tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+  if (tempfd == -1) {
+    LOG(LOG_ERR, "open() returned -1"); perror("open()");
+    return -1;
+  }
+
   pthread_t tsthread;
   rc = pthread_create(&tsthread, NULL, timestamp_thread, NULL);
   if (rc != 0) {
@@ -234,14 +241,15 @@ int main(int argc, char* argv[])
   head_t head;
   TAILQ_INIT(&head);
 
+  // initialize polling structure
   struct pollfd pfd[1];
   pfd[0].fd = sockfd;
   pfd[0].events = POLLIN;
   int timeout = 500;
+  int peerfd_temp = -1;
 
   while(!global_abort) 
   {
-    int peerfd_temp = -1;
     int thread_count = 0;
     int rc = -1;
     struct sockaddr_in peer_addr;
@@ -252,6 +260,7 @@ int main(int argc, char* argv[])
       continue;
     }
     // store file descriptor of accepted connection 
+    peerfd_temp = -1;
     peerfd_temp = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
     if (peerfd_temp == -1) {
       LOG(LOG_ERR, "accept returned -1"); perror("accept");
@@ -292,6 +301,7 @@ int main(int argc, char* argv[])
     LOG(LOG_ERR, "shutdown fail"); perror("shutdown");
   }
   close(sockfd);
+  close(tempfd);
 
   // join and cleanup all the socket threads
   LOG(LOG_INFO, "Joining all threads");
@@ -368,14 +378,11 @@ void* connection_thread(void* params)
       }
     } // end while()
 
+    if (global_abort) goto handle_errors;
+
     // write to file
     // wait for the lock
     pthread_mutex_lock(&file_lock);
-    tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
-    if (tempfd == -1) {
-      LOG(LOG_ERR, "open() returned -1"); perror("open()");
-      goto handle_errors;
-    }
     if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_nbytes)) {
       goto handle_errors;
     } 
@@ -402,7 +409,6 @@ void* connection_thread(void* params)
       }
     } // end while()
 
-    close(tempfd);
     pthread_mutex_unlock(&file_lock);
 
   } // end while()
@@ -414,7 +420,6 @@ void* connection_thread(void* params)
 handle_errors:
   if (recv_buf != NULL)
     free(recv_buf);
-  close(tempfd);
   pthread_mutex_unlock(&file_lock);
   shutdown(peerfd, SHUT_RDWR);
   close(peerfd);
@@ -448,20 +453,12 @@ void* timestamp_thread(void *param)
         pthread_exit(NULL);
       }
       pthread_mutex_lock(&file_lock);
-      tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
-      if (tempfd == -1) {
-        LOG(LOG_ERR, "timestamp_thread open() returned -1"); perror("open()");
-        pthread_mutex_unlock(&file_lock);
-        break;
-      }
       if (-1 == write_wrapper(tempfd, timestr, strlen(timestr))) {
         LOG(LOG_ERR, "timestamp_thread write_wrapper fail");
-        close(tempfd);
         pthread_mutex_unlock(&file_lock);
         break;
       }
       
-      close(tempfd);
       pthread_mutex_unlock(&file_lock);
       start_time.tv_sec += 10;
       if ( (rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &start_time, NULL)) != 0) {
