@@ -363,7 +363,7 @@ void* connection_thread(void* params)
       goto handle_errors;
     } 
 
-    free(recv_buf); recv_buf_size = 0;
+    free(recv_buf); recv_buf = NULL; recv_buf_size = 0;
 
     // echo entire file contents to socket
     lseek(tempfd, 0, SEEK_SET);
