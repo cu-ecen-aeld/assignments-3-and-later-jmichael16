@@ -36,7 +36,7 @@
 
 // by default logs should go to syslog, but can be optionally redirected 
 // to printf for debug purposes by setting macro below to 1
-#define REDIRECT_LOG_TO_PRINTF (1)
+#define REDIRECT_LOG_TO_PRINTF (0)
 #if REDIRECT_LOG_TO_PRINTF
   #define LOG(LOG_LEVEL, msg, ...) printf(msg "\n", ##__VA_ARGS__)
 #else
