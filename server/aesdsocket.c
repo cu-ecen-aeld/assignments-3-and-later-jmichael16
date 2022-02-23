@@ -237,7 +237,7 @@ int main(int argc, char* argv[])
   struct pollfd pfd[1];
   pfd[0].fd = sockfd;
   pfd[0].events = POLLIN;
-  int timeout = 100;
+  int timeout = 500;
 
   while(!global_abort) 
   {
@@ -321,23 +321,24 @@ int main(int argc, char* argv[])
 void* connection_thread(void* params) 
 {
   // copy value from params
-  int peerfd = ((thread_params_t*) params)->peerfd;
+  int peerfd = 0; 
+  int size_step = 128;
+  int recv_buf_size = size_step;
+  char* recv_buf = malloc(size_step*sizeof(char));
+  int recv_buf_nbytes = 0;
+  peerfd = ((thread_params_t*) params)->peerfd;
   free(params);
-  char* recv_buf = NULL;
-  int recv_buf_size = 0;
-
+  
   while(!global_abort) // continuously read/write 
   {
-
-    recv_buf = malloc(0);
-    recv_buf_size = 0;
+    recv_buf_nbytes = 0;
 
     while(!global_abort) // read from socket until '\n' 
     {
-      int recv_temp_size = 256;
+      int recv_temp_size = 32;
       char recv_temp[recv_temp_size];
+      memset(recv_temp, 0, recv_temp_size);
       int ret = recv(peerfd, &recv_temp[0], recv_temp_size, 0);
-      //LOG(LOG_INFO, "recv returned %d bytes", ret);
       if (ret == -1 && errno != EINTR) {
         LOG(LOG_ERR, "recv returned -1"); perror("recv()");
         goto handle_errors;
@@ -345,15 +346,26 @@ void* connection_thread(void* params)
         LOG(LOG_INFO, "Peer socket shutdown");
         goto handle_errors;
       } else if (ret > 0) {
-        recv_buf = realloc(recv_buf, recv_buf_size + ret);
+        /*recv_buf = realloc(recv_buf, recv_buf_size + ret);
         memcpy(recv_buf + recv_buf_size, recv_temp, ret);
         recv_buf_size += ret;
         char* packet_delimiter = strchr(recv_temp, '\n');
         if (packet_delimiter != NULL) {  // delimeter found
           break;
+        }*/
+        // recv_buf not big enough, need to realloc
+        if (recv_buf_nbytes + ret > recv_buf_size) {
+          recv_buf = realloc(recv_buf, recv_buf_size + size_step);
+          recv_buf_size += size_step;
+        } 
+        memcpy(&recv_buf[recv_buf_nbytes], &recv_temp[0], ret);
+        recv_buf_nbytes += ret;
+       
+        char* delimiter = NULL;
+        if ( (delimiter = strchr(recv_temp, '\n')) != NULL ) {  // delimeter found
+          break;
         }
       }
-
     } // end while()
 
     // write to file
@@ -364,11 +376,9 @@ void* connection_thread(void* params)
       LOG(LOG_ERR, "open() returned -1"); perror("open()");
       goto handle_errors;
     }
-    if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_size)) {
+    if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_nbytes)) {
       goto handle_errors;
     } 
-
-    free(recv_buf); recv_buf = NULL; recv_buf_size = 0;
 
     // echo entire file contents to socket
     lseek(tempfd, 0, SEEK_SET);
