@@ -324,7 +324,7 @@ void* connection_thread(void* params)
   int peerfd = 0; 
   int size_step = 128;
   int recv_buf_size = size_step;
-  char* recv_buf = malloc(size_step*sizeof(char));
+  char* recv_buf = calloc(size_step, sizeof(char));
   int recv_buf_nbytes = 0;
   peerfd = ((thread_params_t*) params)->peerfd;
   free(params);
@@ -338,7 +338,7 @@ void* connection_thread(void* params)
       int recv_temp_size = 32;
       char recv_temp[recv_temp_size];
       memset(recv_temp, 0, recv_temp_size);
-      int ret = recv(peerfd, &recv_temp[0], recv_temp_size, 0);
+      int ret = recv(peerfd, &recv_temp[0], recv_temp_size-1, 0);
       if (ret == -1 && errno != EINTR) {
         LOG(LOG_ERR, "recv returned -1"); perror("recv()");
         goto handle_errors;
@@ -391,6 +391,7 @@ void* connection_thread(void* params)
       nread = read(tempfd, chunk, chunk_size);
       if (nread == -1 && errno != EINTR) {
         LOG(LOG_ERR, "read() returned -1"); perror("read()");
+        LOG(LOG_ERR, "fd %d", tempfd);
         goto handle_errors;
       } else if (nread == 0) {
         LOG(LOG_INFO, "EOF detected, socket send complete");
