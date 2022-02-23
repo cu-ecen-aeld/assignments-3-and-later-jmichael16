@@ -317,12 +317,13 @@ void* connection_thread(void* params)
   // copy value from params
   int peerfd = ((thread_params_t*) params)->peerfd;
   free(params);
-
-  char *recv_buf;
-  int recv_buf_size = 0;
+  char* recv_buf = NULL;
 
   while(!global_abort) // continuously read/write 
   {
+
+    recv_buf = malloc(0);
+    int recv_buf_size = 0;
 
     while(!global_abort) // read from socket until '\n' 
     {
@@ -362,7 +363,7 @@ void* connection_thread(void* params)
       goto handle_errors;
     } 
 
-    recv_buf = realloc(recv_buf, 0); recv_buf_size = 0;
+    free(recv_buf); recv_buf_size = 0;
 
     // echo entire file contents to socket
     lseek(tempfd, 0, SEEK_SET);
@@ -395,7 +396,8 @@ void* connection_thread(void* params)
   pthread_exit(NULL);
 
 handle_errors:
-  if (recv_buf != NULL) free(recv_buf);
+  if (recv_buf != NULL)
+    free(recv_buf);
   close(tempfd);
   pthread_mutex_unlock(&file_lock);
   shutdown(peerfd, SHUT_RDWR);
