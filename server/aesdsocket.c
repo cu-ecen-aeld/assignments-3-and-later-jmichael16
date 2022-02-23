@@ -59,12 +59,19 @@ typedef TAILQ_HEAD(head_s, node) head_t;
  * ===========================================================================*/
 pthread_mutex_t file_lock = PTHREAD_MUTEX_INITIALIZER;
 
-typedef struct {
+typedef enum thread_status {
+  RUNNING   = 0,
+  COMPLETED = 1
+} thread_status_t;
+
+typedef struct thread_params {
   int peerfd;
+  thread_status_t *status;
 } thread_params_t;
 
 typedef struct node {
   pthread_t thread;
+  thread_status_t status; 
   TAILQ_ENTRY(node) nodes;
 } node_t;
 
@@ -280,7 +287,9 @@ int main(int argc, char* argv[])
       }
 
       // populate all the things
+      new_node->status = RUNNING;
       new_params->peerfd = peerfd_temp;
+      new_params->status = &(new_node->status);
       // spawn new thread
       rc = pthread_create(&(new_node->thread), NULL, connection_thread, (void*) new_params);
       if (rc != 0) {
@@ -294,6 +303,25 @@ int main(int argc, char* argv[])
       TAILQ_INSERT_TAIL(&head, new_node, nodes); 
       thread_count++;
     } 
+
+    // while we have a chance, join any threads that have
+    // set their completed flag
+    struct node* anode = NULL;
+    struct node* next = NULL;
+    thread_params_t *retval = NULL;
+    TAILQ_FOREACH_SAFE(anode, &head, nodes, next)
+    {
+      if (anode->status == COMPLETED)
+      {
+        LOG(LOG_INFO, "Joining 1 completed thread");
+        rc = pthread_join(anode->thread, (void**) &retval);
+        TAILQ_REMOVE(&head, anode, nodes);
+        free(anode);
+        free(retval);
+        anode = NULL;
+      }
+    }
+
   } // end while()
 
   if ( shutdown(sockfd, SHUT_RDWR) == -1)
@@ -306,18 +334,19 @@ int main(int argc, char* argv[])
   // join and cleanup all the socket threads
   LOG(LOG_INFO, "Joining all threads");
   struct node* anode = NULL;
-  void *retval = NULL;
+  thread_params_t *retval = NULL;
   while (!TAILQ_EMPTY(&head)) {
     // get first element, join thread remove from tailqueue and free
     anode = TAILQ_FIRST(&head);
-    rc = pthread_join(anode->thread, &retval);
+    rc = pthread_join(anode->thread, (void**) &retval);
     TAILQ_REMOVE(&head, anode, nodes);
     free(anode);
+    free(retval);
     anode = NULL;
   }
 
   // join timestamp thread
-  pthread_join(tsthread, &retval);
+  pthread_join(tsthread, NULL);
 
   if (access(TEMPFILE, F_OK) == 0) {
     remove(TEMPFILE); // no lock necessary, all the threads have joined
@@ -328,16 +357,16 @@ int main(int argc, char* argv[])
 } // end main
 
 
-void* connection_thread(void* params) 
+void* connection_thread(void* tparams) 
 {
-  // copy value from params
   int peerfd = 0; 
   int size_step = 128;
   int recv_buf_size = size_step;
   char* recv_buf = calloc(size_step, sizeof(char));
   int recv_buf_nbytes = 0;
-  peerfd = ((thread_params_t*) params)->peerfd;
-  free(params);
+  thread_params_t* params = (thread_params_t*) tparams;
+  peerfd = params->peerfd;
+  thread_status_t* status = params->status;
   
   while(!global_abort) // continuously read/write 
   {
@@ -413,9 +442,10 @@ void* connection_thread(void* params)
 
   } // end while()
 
+  *status = COMPLETED;
   shutdown(peerfd, SHUT_RDWR);
   close(peerfd);
-  pthread_exit(NULL);
+  pthread_exit(params);
 
 handle_errors:
   if (recv_buf != NULL)
@@ -423,7 +453,8 @@ handle_errors:
   pthread_mutex_unlock(&file_lock);
   shutdown(peerfd, SHUT_RDWR);
   close(peerfd);
-  pthread_exit(NULL);
+  *status = COMPLETED;
+  pthread_exit(params);
 
 } // end connection_thread
 
