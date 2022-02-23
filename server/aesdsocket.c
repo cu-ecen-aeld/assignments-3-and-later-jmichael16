@@ -253,8 +253,8 @@ int main(int argc, char* argv[])
     }
     // store file descriptor of accepted connection 
     peerfd_temp = accept(sockfd, (struct sockaddr *) &peer_addr, &peer_addr_size);
-    if (peerfd_temp < 0) {
-      LOG(LOG_ERR, "accept returned <0"); perror("accept");
+    if (peerfd_temp == -1) {
+      LOG(LOG_ERR, "accept returned -1"); perror("accept");
       continue;
     } else {
       // print human-readable IP address
@@ -287,7 +287,10 @@ int main(int argc, char* argv[])
     } 
   } // end while()
 
-  shutdown(sockfd, SHUT_RDWR);
+  if ( shutdown(sockfd, SHUT_RDWR) == -1)
+  {
+    LOG(LOG_ERR, "shutdown fail"); perror("shutdown");
+  }
   close(sockfd);
 
   // join and cleanup all the socket threads
@@ -321,12 +324,13 @@ void* connection_thread(void* params)
   int peerfd = ((thread_params_t*) params)->peerfd;
   free(params);
   char* recv_buf = NULL;
+  int recv_buf_size = 0;
 
   while(!global_abort) // continuously read/write 
   {
 
     recv_buf = malloc(0);
-    int recv_buf_size = 0;
+    recv_buf_size = 0;
 
     while(!global_abort) // read from socket until '\n' 
     {
@@ -351,8 +355,6 @@ void* connection_thread(void* params)
       }
 
     } // end while()
-
-    if (global_abort) goto handle_errors;
 
     // write to file
     // wait for the lock
