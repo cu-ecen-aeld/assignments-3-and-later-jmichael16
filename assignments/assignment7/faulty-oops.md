@@ -3,7 +3,7 @@
 Assignment 7 consists of using buildroot to build and run several kernel modules from the Linux Device Drivers textbook, based off this [repo](https://github.com/martinezjavier/ldd3). 
 The faulty module in misc-modules has a kernel error. After starting the QEMU instance and running the following command, the error message below is the result: 
 
-'''
+```
 # echo "hello_world" > /dev/faulty
 Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
 Mem abort info:
@@ -50,7 +50,7 @@ Call trace:
  el0_sync+0x174/0x180
 Code: d2800001 d2800000 d503233f d50323bf (b900003f)
 ---[ end trace 546afa0e0e5db6a2 ]---
-'''
+```
 
 We can see that this error message indicates a page fault by the first line. Further, it shows us that the program counter was within the faulty_write function. 
 If we take a look at the [code line of interest](https://github.com/cu-ecen-aeld/assignment-7-jmichael16/blob/117fbf20b34fc093e5457008253a505f621f307d/misc-modules/faulty.c#L53),
