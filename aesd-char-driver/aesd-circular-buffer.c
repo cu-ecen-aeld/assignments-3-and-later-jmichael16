@@ -29,10 +29,22 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
 			size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    /**
-    * TODO: implement per description
-    */
-    return NULL;
+  struct aesd_buffer_entry *e;
+  int scanned = 0;
+  int index;
+  for (int count = 0; count < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; count++)
+  {
+    index = (buffer->out_offs + count) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    e = &(buffer->entry[index]);
+    if (scanned + e->size > char_offset) 
+    {
+      // these are the droids we are looking for
+      *entry_offset_byte_rtn = char_offset - scanned;
+      return e; 
+    }
+    scanned += e->size;
+  }
+  return NULL;
 }
 
 /**
@@ -44,10 +56,23 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    /**
-    * TODO: implement per description 
-    */
-}
+  if ( (buffer->in_offs == buffer->out_offs) && buffer->full ) 
+  {
+    // write to buffer and increment 
+    buffer->entry[buffer->in_offs] = *add_entry;
+    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    buffer->out_offs = buffer->in_offs; 
+  }
+  else 
+  {
+    buffer->entry[buffer->in_offs] = *add_entry;
+    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    if (buffer->in_offs == buffer->out_offs) 
+    {
+      buffer->full = true;
+    }
+  }
+} // end aesd_circular_buffer_add_entry
 
 /**
 * Initializes the circular buffer described by @param buffer to an empty struct
@@ -56,3 +81,4 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
 {
     memset(buffer,0,sizeof(struct aesd_circular_buffer));
 }
+
