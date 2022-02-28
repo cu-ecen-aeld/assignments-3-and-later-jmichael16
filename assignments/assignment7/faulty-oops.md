@@ -54,4 +54,27 @@ Code: d2800001 d2800000 d503233f d50323bf (b900003f)
 
 We can see by the first line of the oops message that there was likely a page fault. Further, it shows us that the program counter was within the faulty_write function. 
 If we take a look at the [code line of interest](https://github.com/cu-ecen-aeld/assignment-7-jmichael16/blob/117fbf20b34fc093e5457008253a505f621f307d/misc-modules/faulty.c#L53),
-we can see that there is indeed a NULL pointer dereference. 
+we can see that there is indeed a NULL pointer dereference. If we needed any more assurance that this was our issue, we could issue the objdump command below to get the assembly of the 
+source .ko file:
+
+```
+[~/aesd/assignments-buildroot]$ ./buildroot/output/host/bin/aarch64-linux-objdump -S buildroot/output/build/ldd-117fbf20b34fc093e5457008253a505f621f307d/misc-modules/faulty.ko
+
+buildroot/output/build/ldd-117fbf20b34fc093e5457008253a505f621f307d/misc-modules/faulty.ko:     file format elf64-littleaarch64
+
+
+Disassembly of section .text:
+
+0000000000000000 <faulty_write>:
+   0:	d2800001 	mov	x1, #0x0                   	// #0
+   4:	d2800000 	mov	x0, #0x0                   	// #0
+   8:	d503233f 	paciasp
+   c:	d50323bf 	autiasp
+  10:	b900003f 	str	wzr, [x1]
+  14:	d65f03c0 	ret
+  18:	d503201f 	nop
+  1c:	d503201f 	nop
+```
+
+From the objdump command, we can see that the constant value of `0x0` is loaded into `x1` on the first instruction. Then, on line 0x10 of faulty_write 
+(which is also shown in the oops message), the contents of the zero register `wzr` are stored to the memory pointed at by `xl`, which was zero. Hence the page fault.  
