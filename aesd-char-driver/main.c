@@ -33,24 +33,15 @@ MODULE_LICENSE("Dual BSD/GPL");
 // define global, persistent data structure for the aesd char device
 struct aesd_dev aesd_device;
 
-// the file operations which are supported by the driver
-// all unlisted are NULL and so are unsupported
-struct file_operations aesd_fops = {
-	.owner =    THIS_MODULE,
-	.read =     aesd_read,
-	.write =    aesd_write,
-	.open =     aesd_open,
-	.release =  aesd_release,
-};
 
 // this is the first operation performed on the device file
 int aesd_open(struct inode *inode, struct file *filp)
 {
-	PDEBUG("open");
-  
   // used Linux Device Drivers scull device as reference:
   // declare dummy pointer to aesd_dev struct
   struct aesd_dev *dev;
+
+	PDEBUG("open");
 
   // populate dev with a pointer to the aesd_dev struct associated with inode
   dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
@@ -79,6 +70,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
   ssize_t read_size = 0;
   ssize_t uncopied_count = 0;
   struct aesd_buffer_entry *read_entry = NULL;
+  struct aesd_dev *dev;
 
 	PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
 
@@ -86,7 +78,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
   if (count == 0) { return 0; }
   if (filp == NULL || buf == NULL || f_pos == NULL) { return -EFAULT; }
 
-  struct aesd_dev *dev = (struct aesd_dev *) filp->private_data;
+  dev = (struct aesd_dev *) filp->private_data;
 
   if( mutex_lock_interruptible( &(dev->lock) ) )
   {
@@ -113,7 +105,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
   }
 
   // check accessibility of userspace buffer
-  if ( !access_ok(VERIFY_WRITE, buf, count) )
+  if ( !access_ok(buf, count) )
   {
     PDEBUG(KERN_ERR "aesd_read: access_ok fail");
     retval = -EFAULT;
@@ -121,7 +113,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
   }
   uncopied_count = copy_to_user(buf, read_entry->buffptr + read_offset, read_size); 
   retval = read_size - uncopied_count;
-  *fpos += retval;
+  *f_pos += retval;
 
 handle_errors:
   mutex_unlock( &(dev->lock) );
@@ -136,6 +128,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   ssize_t uncopied_count = 0;
   ssize_t retval = -ENOMEM;
   const char* overwritten = NULL; 
+  struct aesd_dev *dev;
 
 	PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
 
@@ -144,7 +137,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   if (filp == NULL || buf == NULL || f_pos == NULL) { return -EFAULT; }
 
   // dereference private_data from file pointer
-  struct aesd_dev *dev = (struct aesd_dev *) filp->private_data;
+  dev = (struct aesd_dev *) filp->private_data;
 
   // acquire the mutex lock
   if( mutex_lock_interruptible( &(dev->lock) ) )
@@ -178,7 +171,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   }
 
   // check accessibility of userspace buffer
-  if ( !access_ok(VERIFY_READ, buf, count) )
+  if ( !access_ok(buf, count) )
   {
     PDEBUG(KERN_ERR "aesd_write: access_ok fail");
     retval = -EFAULT;
@@ -186,7 +179,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   }
 
   // copy buffer from user to heap allocated entry
-  uncopied_count = copy_from_user(dev->write_append.buffptr + dev->write_append.size, 
+  uncopied_count = copy_from_user((void *) (dev->write_append.buffptr + dev->write_append.size), 
                                   buf, 
                                   count);
 
@@ -211,6 +204,17 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 	return retval;
 }
 
+
+// the file operations which are supported by the driver
+// all unlisted are NULL and so are unsupported
+struct file_operations aesd_fops = {
+	.owner =    THIS_MODULE,
+	.read =     aesd_read,
+	.write =    aesd_write,
+	.open =     aesd_open,
+	.release =  aesd_release,
+};
+
 // sets up the aesd_dev 
 static int aesd_setup_cdev(struct aesd_dev *dev)
 {
@@ -224,8 +228,6 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
 	}
 	return err;
 }
-
-
 
 int aesd_init_module(void)
 {
@@ -241,7 +243,7 @@ int aesd_init_module(void)
 	memset(&aesd_device,0,sizeof(struct aesd_dev));
 
 	// initialize the AESD specific portion of the device
-	mutex_init(&(aesd_device.lock);
+	mutex_init(&(aesd_device.lock));
 
 	result = aesd_setup_cdev(&aesd_device);
 
