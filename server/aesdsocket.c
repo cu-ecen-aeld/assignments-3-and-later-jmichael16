@@ -239,11 +239,13 @@ int main(int argc, char* argv[])
   } 
 
   // open tempfile with descriptor tempfd
+  /*
   tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
   if (tempfd == -1) {
     LOG(LOG_ERR, "open() returned -1"); perror("open()");
     return -1;
   }
+  */
 
 #if (USE_AESD_CHAR_DEVICE == 0)
   pthread_t tsthread;
@@ -427,6 +429,11 @@ void* connection_thread(void* tparams)
     // write to file
     // wait for the lock
     pthread_mutex_lock(&file_lock);
+    tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+    if (tempfd == -1) {
+      LOG(LOG_ERR, "open() returned -1"); perror("open()");
+      goto handle_errors;
+    }
     if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_nbytes)) {
       goto handle_errors;
     } 
@@ -463,6 +470,7 @@ void* connection_thread(void* tparams)
       }
     } // end while()
 
+    close(tempfd);
     pthread_mutex_unlock(&file_lock);
 
   } // end while()
@@ -478,6 +486,7 @@ handle_errors:
   pthread_mutex_unlock(&file_lock);
   shutdown(peerfd, SHUT_RDWR);
   close(peerfd);
+  close(tempfd);
   *status = COMPLETED;
   pthread_exit(params);
 
@@ -509,12 +518,18 @@ void* timestamp_thread(void *param)
         pthread_exit(NULL);
       }
       pthread_mutex_lock(&file_lock);
+      tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+      if (tempfd == -1) {
+        LOG(LOG_ERR, "open() returned -1"); perror("open()");
+        pthread_mutex_unlock(&file_lock);
+        break;
+      }
       if (-1 == write_wrapper(tempfd, timestr, strlen(timestr))) {
         LOG(LOG_ERR, "timestamp_thread write_wrapper fail");
         pthread_mutex_unlock(&file_lock);
         break;
       }
-      
+      close(tempfd);
       pthread_mutex_unlock(&file_lock);
       start_time.tv_sec += 10;
       if ( (rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &start_time, NULL)) != 0) {
