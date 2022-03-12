@@ -153,7 +153,7 @@ int main(int argc, char* argv[])
   int daemonize_flag = 0;
   struct addrinfo* server_addr = NULL;
   
-#if (USE_AESD_CHAR_DRIVER == 0)
+#if (USE_AESD_CHAR_DEVICE == 0)
   // if we can access the tempfile, it is stale
   if (access(TEMPFILE, F_OK) == 0) {
     remove(TEMPFILE); // no lock necessary, all the threads have joined
@@ -245,7 +245,7 @@ int main(int argc, char* argv[])
     return -1;
   }
 
-#if (USE_AESD_CHAR_DRIVER == 0)
+#if (USE_AESD_CHAR_DEVICE == 0)
   pthread_t tsthread;
   rc = pthread_create(&tsthread, NULL, timestamp_thread, NULL);
   if (rc != 0) {
@@ -356,10 +356,12 @@ int main(int argc, char* argv[])
   }
 
   // join timestamp thread
+#if (USE_AESD_CHAR_DEVICE == 0)
   pthread_join(tsthread, NULL);
+#endif
 
 
-#if (USE_AESD_CHAR_DRIVER == 0)
+#if (USE_AESD_CHAR_DEVICE == 0)
   if (access(TEMPFILE, F_OK) == 0) {
     remove(TEMPFILE); // no lock necessary, all the threads have joined
   }

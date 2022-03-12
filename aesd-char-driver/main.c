@@ -196,8 +196,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
       kfree(overwritten);
     }
 
-    // free the write_append buffer
-    kfree(dev->write_append.buffptr);
     dev->write_append.buffptr = NULL;
     dev->write_append.size = 0;
   }
@@ -248,6 +246,7 @@ int aesd_init_module(void)
 
 	// initialize the AESD specific portion of the device
 	mutex_init(&(aesd_device.lock));
+  aesd_circular_buffer_init(&(aesd_device.cbuf));
 
 	result = aesd_setup_cdev(&aesd_device);
 
