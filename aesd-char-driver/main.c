@@ -89,7 +89,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
   read_entry = aesd_circular_buffer_find_entry_offset_for_fpos(&(dev->cbuf), 
                                                                *f_pos, 
                                                                &read_offset);
-  if ( !read_entry )
+  if ( read_entry == NULL )
   {
     goto handle_errors;
   } 
@@ -171,7 +171,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   }
 
   // check accessibility of userspace buffer
-  if ( !access_ok(buf, count) )
+  if ( access_ok(buf, count) == 0 )
   {
     PDEBUG(KERN_ERR "aesd_write: access_ok fail");
     retval = -EFAULT;
@@ -187,20 +187,24 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   retval = count - uncopied_count;
   dev->write_append.size += retval;
 
-  if( !strchr(buf, '\n') ) 
+  if( memchr(dev->write_append.buffptr, '\n', dev->write_append.size) != NULL ) 
   {
     // store heap allocated buffer in circular buffer, make sure to free if non-NULL return
     overwritten = aesd_circular_buffer_add_entry(&(dev->cbuf), &(dev->write_append));
-    if ( !overwritten ) 
+    if ( overwritten != NULL ) 
     {
       kfree(overwritten);
     }
+
+    // free the write_append buffer
+    kfree(dev->write_append.buffptr);
+    dev->write_append.buffptr = NULL;
+    dev->write_append.size = 0;
   }
 
-  // handle error returns
-  handle_errors:
-    mutex_unlock( &(dev->lock) );
-
+// handle error returns
+handle_errors:
+  mutex_unlock( &(dev->lock) );
 	return retval;
 }
 
@@ -256,14 +260,25 @@ int aesd_init_module(void)
 
 void aesd_cleanup_module(void)
 {
+
+  uint8_t index;
+  struct aesd_buffer_entry *entry;
+
 	dev_t devno = MKDEV(aesd_major, aesd_minor);
-
 	cdev_del(&aesd_device.cdev);
+  
+  // free the write_append buffer
+  kfree(aesd_device.write_append.buffptr);
 
-	/**
-	 * TODO: cleanup AESD specific poritions here as necessary
-	 */
-
+  // clean up circular buffer entries
+  AESD_CIRCULAR_BUFFER_FOREACH(entry, &(aesd_device.cbuf), index)
+  {
+    if(entry->buffptr != NULL)
+    {
+      kfree(entry->buffptr);
+    }
+  }
+  
 	unregister_chrdev_region(devno, 1);
 }
 

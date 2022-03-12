@@ -44,7 +44,7 @@
 #endif
 
 #define PORT "9000"
-#define USE_AESD_CHAR_DEVICE (0)
+#define USE_AESD_CHAR_DEVICE (1)
 #if (USE_AESD_CHAR_DEVICE == 1)
   #define TEMPFILE "/dev/aesdchar"
 #else
@@ -358,9 +358,12 @@ int main(int argc, char* argv[])
   // join timestamp thread
   pthread_join(tsthread, NULL);
 
+
+#if (USE_AESD_CHAR_DRIVER == 0)
   if (access(TEMPFILE, F_OK) == 0) {
     remove(TEMPFILE); // no lock necessary, all the threads have joined
   }
+#endif
 
   return 0; 
 
