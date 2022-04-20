@@ -44,7 +44,13 @@
 #endif
 
 #define PORT "9000"
-#define TEMPFILE "/var/tmp/aesdsocketdata"
+#define USE_AESD_CHAR_DEVICE (1)
+#if (USE_AESD_CHAR_DEVICE == 1)
+  #define TEMPFILE "/dev/aesdchar"
+#else
+  #define TEMPFILE "/var/tmp/aesdsocketdata"
+#endif
+
 
 /* ============================================================================
  *    GLOBALS
@@ -147,10 +153,12 @@ int main(int argc, char* argv[])
   int daemonize_flag = 0;
   struct addrinfo* server_addr = NULL;
   
-  // if we can access the temfile, it is stale
+#if (USE_AESD_CHAR_DEVICE == 0)
+  // if we can access the tempfile, it is stale
   if (access(TEMPFILE, F_OK) == 0) {
     remove(TEMPFILE); // no lock necessary, all the threads have joined
   }
+#endif
 
   // handle daemonize flag from args
   if (argc >= 2) {
@@ -231,18 +239,22 @@ int main(int argc, char* argv[])
   } 
 
   // open tempfile with descriptor tempfd
+  /*
   tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
   if (tempfd == -1) {
     LOG(LOG_ERR, "open() returned -1"); perror("open()");
     return -1;
   }
+  */
 
+#if (USE_AESD_CHAR_DEVICE == 0)
   pthread_t tsthread;
   rc = pthread_create(&tsthread, NULL, timestamp_thread, NULL);
   if (rc != 0) {
     LOG(LOG_ERR, "timestamp thread could not be created, returned %d", rc);
     return -1;
   }
+#endif
 
   // initialize linked-list
   head_t head;
@@ -346,12 +358,17 @@ int main(int argc, char* argv[])
   }
 
   // join timestamp thread
+#if (USE_AESD_CHAR_DEVICE == 0)
   pthread_join(tsthread, NULL);
+#endif
 
+
+#if (USE_AESD_CHAR_DEVICE == 0)
   if (access(TEMPFILE, F_OK) == 0) {
     remove(TEMPFILE); // no lock necessary, all the threads have joined
   }
-  
+#endif
+
   return 0; 
 
 } // end main
@@ -412,12 +429,27 @@ void* connection_thread(void* tparams)
     // write to file
     // wait for the lock
     pthread_mutex_lock(&file_lock);
+    tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+    if (tempfd == -1) {
+      LOG(LOG_ERR, "open() returned -1"); perror("open()");
+      goto handle_errors;
+    }
     if (-1 == write_wrapper(tempfd, recv_buf, recv_buf_nbytes)) {
       goto handle_errors;
     } 
 
     // echo entire file contents to socket
+#if (USE_AESD_CHAR_DEVICE == 0)
     lseek(tempfd, 0, SEEK_SET);
+#else 
+    // close and re-open tempfd to get file position of 0
+    close(tempfd);
+    tempfd = open(TEMPFILE, O_RDWR);
+    if (tempfd == -1) {
+      LOG(LOG_ERR, "open() returned -1"); perror("open()");
+      goto handle_errors;
+    }
+#endif 
     int chunk_size = 256;
     char chunk[chunk_size];
     int nread = -1;
@@ -438,6 +470,7 @@ void* connection_thread(void* tparams)
       }
     } // end while()
 
+    close(tempfd);
     pthread_mutex_unlock(&file_lock);
 
   } // end while()
@@ -453,6 +486,7 @@ handle_errors:
   pthread_mutex_unlock(&file_lock);
   shutdown(peerfd, SHUT_RDWR);
   close(peerfd);
+  close(tempfd);
   *status = COMPLETED;
   pthread_exit(params);
 
@@ -484,12 +518,18 @@ void* timestamp_thread(void *param)
         pthread_exit(NULL);
       }
       pthread_mutex_lock(&file_lock);
+      tempfd = open(TEMPFILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+      if (tempfd == -1) {
+        LOG(LOG_ERR, "open() returned -1"); perror("open()");
+        pthread_mutex_unlock(&file_lock);
+        break;
+      }
       if (-1 == write_wrapper(tempfd, timestr, strlen(timestr))) {
         LOG(LOG_ERR, "timestamp_thread write_wrapper fail");
         pthread_mutex_unlock(&file_lock);
         break;
       }
-      
+      close(tempfd);
       pthread_mutex_unlock(&file_lock);
       start_time.tv_sec += 10;
       if ( (rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &start_time, NULL)) != 0) {
